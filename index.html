@@ -281,11 +281,6 @@
         let apiKey = "AIzaSyAS3hXY8q6HypRoIb9cN3WQbsFyBDYUNYk"; // Gemini API key
         let selectedDeviceId = ""; // Store selected audio input device
         let audioStream = null; // Store the active audio stream
-        
-        // Add a continuous listening flag
-        let isListening = false;
-        // Add a wake word detection flag
-        let wakeWordDetected = false;
 
         // DOM elements
         const permissionSection = document.getElementById('permissionSection');
@@ -413,7 +408,7 @@
             }
         });
 
-        // Toggle voice assistant on/off
+        // Toggle voice assistant on/off - Fixed to properly start the assistant
         toggleButton.addEventListener('click', () => {
             addLog(`Toggle button clicked. Current state: ${isRunning ? 'Running' : 'Stopped'}`);
             
@@ -424,7 +419,7 @@
             }
         });
 
-        // Start the voice assistant - FIXED
+        // Start the voice assistant
         async function startAssistant() {
             try {
                 addLog("Starting assistant...");
@@ -434,8 +429,11 @@
                 statusIndicator.classList.add("active");
                 updateStatus("Initializing...");
 
-                // Set up continuous wake word detection
-                setupWakeWordDetection();
+                // Initialize the keyword spotting with selected device
+                await initKeywordSpotting();
+                
+                // Set up speech recognition
+                setupSpeechRecognition();
                 
                 // Initialize Web Speech API for speech synthesis
                 if (!speechSynthesis) {
@@ -456,13 +454,21 @@
         function stopAssistant() {
             addLog("Stopping assistant...");
             isRunning = false;
-            isListening = false;
-            wakeWordDetected = false;
             toggleButton.textContent = "Start Assistant";
             toggleButton.classList.remove("running");
             statusIndicator.classList.remove("active");
             updateStatus("Idle");
 
+            // Stop keyword recognition
+            if (recognizer) {
+                try {
+                    recognizer.stopListening();
+                    addLog("Keyword recognizer stopped");
+                } catch (e) {
+                    addLog(`Error stopping recognizer: ${e.message}`);
+                }
+            }
+            
             // Stop speech recognition
             if (recognition) {
                 try {
@@ -479,130 +485,72 @@
             }
         }
 
-        // Set up continuous wake word detection using Web Speech API
-        function setupWakeWordDetection() {
-            // Check if browser supports speech recognition
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) {
-                addLog("Error: Speech recognition not supported in this browser");
-                return;
-            }
-            
-            // Create continuous recognition object for wake word
-            const wakeWordRecognition = new SpeechRecognition();
-            wakeWordRecognition.continuous = true;
-            wakeWordRecognition.interimResults = true;
-            wakeWordRecognition.lang = 'en-US';
-            
-            // Set device constraints if browser supports it
-            if (selectedDeviceId) {
-                try {
-                    // For Chrome-specific implementation
-                    if (typeof wakeWordRecognition.audioSourceId !== 'undefined') {
-                        wakeWordRecognition.audioSourceId = selectedDeviceId;
-                    } else if (typeof wakeWordRecognition.sourceId !== 'undefined') {
-                        wakeWordRecognition.sourceId = selectedDeviceId;
-                    } else if (typeof wakeWordRecognition.mediaDeviceId !== 'undefined') {
-                        wakeWordRecognition.mediaDeviceId = selectedDeviceId;
-                    }
-                } catch (e) {
-                    addLog("Note: This browser may not support custom microphone selection");
-                }
-            }
-            
-            // Set up result handler to detect wake word
-            wakeWordRecognition.onresult = (event) => {
-                if (!isRunning || wakeWordDetected) return;
-                
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript.trim().toLowerCase();
-                    
-                    // Log for debugging
-                    addLog(`Heard: ${transcript}`);
-                    
-                    // Check for wake word "genius"
-                    if (transcript.includes("genius")) {
-                        wakeWordDetected = true;
-                        addLog("Wake word 'Genius' detected!");
-                        wakeWordRecognition.stop();
-                        handleWakeWordDetected();
-                        break;
-                    }
-                }
-            };
-            
-            // Handle end of wake word recognition - restart if not detected
-            wakeWordRecognition.onend = () => {
-                if (isRunning && !wakeWordDetected) {
-                    addLog("Wake word recognition restarting");
-                    try {
-                        wakeWordRecognition.start();
-                    } catch (e) {
-                        addLog(`Error restarting wake word recognition: ${e.message}`);
-                        // Try again after a short delay
-                        setTimeout(() => {
-                            if (isRunning && !wakeWordDetected) {
-                                try {
-                                    wakeWordRecognition.start();
-                                } catch (error) {
-                                    addLog(`Failed to restart wake word detection: ${error.message}`);
-                                }
-                            }
-                        }, 1000);
-                    }
-                }
-            };
-            
-            // Handle errors
-            wakeWordRecognition.onerror = (event) => {
-                addLog(`Wake word recognition error: ${event.error}`);
-                
-                // Restart after error if still running
-                if (isRunning && !wakeWordDetected) {
-                    setTimeout(() => {
-                        try {
-                            wakeWordRecognition.start();
-                        } catch (e) {
-                            addLog(`Failed to restart after error: ${e.message}`);
-                        }
-                    }, 1000);
-                }
-            };
-            
-            // Start listening for wake word
+        // Initialize keyword spotting using TensorFlow.js
+        async function initKeywordSpotting() {
             try {
-                wakeWordRecognition.start();
-                isListening = true;
-                addLog("Started listening for wake word 'Genius'");
-            } catch (e) {
-                addLog(`Error starting wake word recognition: ${e.message}`);
-                isListening = false;
+                addLog("Initializing keyword spotting...");
+                
+                // Create audio constraints with selected device
+                const audioConstraints = { 
+                    deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined 
+                };
+                
+                // Request a new audio stream with the selected device
+                if (audioStream) {
+                    // Stop all tracks in the previous stream
+                    audioStream.getTracks().forEach(track => track.stop());
+                }
+                
+                audioStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+                addLog("Audio stream created for selected device");
+                
+                // Load the speech commands model
+                if (recognizer) {
+                    try {
+                        recognizer.stopListening();
+                    } catch (e) {
+                        // Ignore errors when stopping previous recognizer
+                    }
+                }
+                
+                recognizer = speechCommands.create('BROWSER_FFT', undefined, {
+                    invokeCallbackOnNoiseAndUnknown: false,
+                    includeSpectrogram: true,
+                    probabilityThreshold: 0.75
+                });
+                
+                await recognizer.ensureModelLoaded();
+                addLog("Speech commands model loaded");
+                
+                // Start listening for keywords with selected device
+                recognizer.listen(result => {
+                    if (!isRunning) return;
+                    
+                    const scores = Array.from(result.scores);
+                    const maxScore = Math.max(...scores);
+                    const maxScoreIndex = scores.indexOf(maxScore);
+                    const wordLabels = recognizer.wordLabels();
+                    const detectedWord = wordLabels[maxScoreIndex];
+                    
+                    // Check if "yes" was detected (as a proxy for "Genius")
+                    if (detectedWord === 'yes' && maxScore > 0.8) {
+                        handleKeywordDetected();
+                    }
+                }, {
+                    includeSpectrogram: true,
+                    probabilityThreshold: 0.8,
+                    overlapFactor: 0.5,
+                    audioTrackConstraints: audioConstraints
+                });
+                
+                addLog(`Listening with device: ${audioInputSelect.options[audioInputSelect.selectedIndex].text}`);
+            } catch (error) {
+                addLog(`Error initializing keyword spotting: ${error.message}`);
+                throw error;
             }
         }
 
-        // Handle wake word detection and set up for question
-        function handleWakeWordDetected() {
-            updateStatus("Say your question...");
-            playBeep(1, 1000, 0.5, 1800);
-            
-            // Set up speech recognition for the question
-            setupSpeechRecognition();
-            
-            // Start speech recognition after a short delay
-            setTimeout(() => {
-                if (isRunning) {
-                    try {
-                        recognition.start();
-                        addLog("Question recognition started");
-                    } catch (e) {
-                        addLog(`Error starting question recognition: ${e.message}`);
-                        resetAfterResponse();
-                    }
-                }
-            }, 1000);
-        }
-
-        // Set up the Web Speech API for question recognition (after wake word)
+        // Set up the Web Speech API for speech recognition
         function setupSpeechRecognition() {
             // Check if browser supports speech recognition
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -611,7 +559,7 @@
                 return;
             }
             
-            // Create recognition object for the question
+            // Create recognition object
             recognition = new SpeechRecognition();
             recognition.continuous = false;
             recognition.interimResults = false;
@@ -633,7 +581,7 @@
                 }
             }
             
-            // Set up result handler for the question
+            // Set up result handler
             recognition.onresult = (event) => {
                 const last = event.results.length - 1;
                 const text = event.results[last][0].transcript.trim();
@@ -649,15 +597,47 @@
             // Set up error handler
             recognition.onerror = (event) => {
                 addLog(`Speech recognition error: ${event.error}`);
-                resetAfterResponse();
+                updateStatus("Listening for 'Genius'...");
+                
+                // Restart the recognition in case of errors
+                setTimeout(() => {
+                    if (isRunning) {
+                        resetAfterResponse();
+                    }
+                }, 1000);
             };
             
             // Set up end handler
             recognition.onend = () => {
-                addLog("Question recognition ended");
+                addLog("Speech recognition ended");
             };
             
-            addLog("Question recognition setup complete");
+            addLog("Speech recognition setup complete");
+        }
+
+        // Handle keyword detection ("Genius")
+        function handleKeywordDetected() {
+            addLog("Keyword 'Genius' detected!");
+            updateStatus("Say your question...");
+            playBeep(1, 1000, 0.5, 1800);
+            
+            // Pause keyword spotting temporarily
+            if (recognizer) {
+                recognizer.stopListening();
+            }
+            
+            // Start speech recognition after a short delay
+            setTimeout(() => {
+                if (recognition && isRunning) {
+                    try {
+                        recognition.start();
+                        addLog("Speech recognition started");
+                    } catch (e) {
+                        addLog(`Error starting recognition: ${e.message}`);
+                        resetAfterResponse();
+                    }
+                }
+            }, 1000);
         }
 
         // Generate response from Gemini API
@@ -760,10 +740,47 @@
             if (!isRunning) return;
             
             updateStatus("Listening for 'Genius'...");
-            wakeWordDetected = false;
             
-            // Restart wake word detection
-            setupWakeWordDetection();
+            // Restart keyword spotting with the selected device
+            if (recognizer) {
+                // Create audio constraints with selected device
+                const audioConstraints = {
+                    deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined
+                };
+                
+                try {
+                    recognizer.listen(result => {
+                        if (!isRunning) return;
+                        
+                        const scores = Array.from(result.scores);
+                        const maxScore = Math.max(...scores);
+                        const maxScoreIndex = scores.indexOf(maxScore);
+                        const wordLabels = recognizer.wordLabels();
+                        const detectedWord = wordLabels[maxScoreIndex];
+                        
+                        if (detectedWord === 'yes' && maxScore > 0.8) {
+                            handleKeywordDetected();
+                        }
+                    }, {
+                        includeSpectrogram: true,
+                        probabilityThreshold: 0.8,
+                        overlapFactor: 0.5,
+                        audioTrackConstraints: audioConstraints
+                    });
+                    
+                    addLog("Keyword detection restarted");
+                } catch (e) {
+                    addLog(`Error restarting keyword detection: ${e.message}`);
+                    // Try to reinitialize completely if restarting fails
+                    setTimeout(() => {
+                        if (isRunning) {
+                            initKeywordSpotting().catch(err => {
+                                addLog(`Failed to reinitialize: ${err.message}`);
+                            });
+                        }
+                    }, 1000);
+                }
+            }
         }
 
         // Play beep sound
