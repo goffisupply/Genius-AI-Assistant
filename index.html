@@ -180,6 +180,28 @@
         .hidden {
             display: none;
         }
+
+        .audio-selector {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 8px;
+        }
+
+        .audio-selector label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+
+        .audio-selector select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: white;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -200,6 +222,14 @@
                 <div class="status-container">
                     <div id="statusIndicator" class="status-indicator"></div>
                     <div id="statusText" class="status-text">Idle</div>
+                </div>
+                
+                <!-- Audio input device selector -->
+                <div class="audio-selector">
+                    <label for="audioInputSelect">Audio Input Device:</label>
+                    <select id="audioInputSelect">
+                        <option value="">Loading devices...</option>
+                    </select>
                 </div>
                 
                 <button id="toggleButton" class="toggle-button">Start Assistant</button>
@@ -236,6 +266,7 @@
         let audioContext = null;
         let speechSynthesis = window.speechSynthesis;
         let apiKey = "AIzaSyAS3hXY8q6HypRoIb9cN3WQbsFyBDYUNYk"; // Gemini API key from your Python code
+        let selectedDeviceId = ""; // Store selected audio input device
 
         // DOM elements
         const permissionSection = document.getElementById('permissionSection');
@@ -249,6 +280,7 @@
         const responseContainer = document.getElementById('responseContainer');
         const responseText = document.getElementById('responseText');
         const logContainer = document.getElementById('logContainer');
+        const audioInputSelect = document.getElementById('audioInputSelect');
 
         // Request microphone permission
         permissionButton.addEventListener('click', async () => {
@@ -263,11 +295,74 @@
                 // Initialize audio context
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 
+                // Get available audio devices
+                await getAudioInputDevices();
+                
                 // Add log
                 addLog("Microphone access granted");
             } catch (error) {
                 addLog(`Error: ${error.message}`);
                 alert("Microphone access is required for this app to function.");
+            }
+        });
+
+        // Get available audio input devices
+        async function getAudioInputDevices() {
+            try {
+                // Get list of media devices
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                
+                // Filter for audio input devices
+                const audioInputs = devices.filter(device => device.kind === 'audioinput');
+                
+                // Clear dropdown
+                audioInputSelect.innerHTML = '';
+                
+                // Add devices to dropdown
+                audioInputs.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Microphone ${audioInputSelect.options.length + 1}`;
+                    audioInputSelect.add(option);
+                });
+                
+                // Select first device by default
+                if (audioInputs.length > 0) {
+                    selectedDeviceId = audioInputs[0].deviceId;
+                    addLog(`Found ${audioInputs.length} audio input devices`);
+                    
+                    // Check if any Bluetooth devices are detected
+                    const bluetoothDevices = audioInputs.filter(device => 
+                        device.label.toLowerCase().includes('bluetooth') || 
+                        device.label.toLowerCase().includes('airpods') ||
+                        device.label.toLowerCase().includes('wireless') ||
+                        device.label.toLowerCase().includes('headset'));
+                    
+                    if (bluetoothDevices.length > 0) {
+                        addLog(`Detected Bluetooth audio devices: ${bluetoothDevices.map(d => d.label).join(', ')}`);
+                        // Auto-select the first Bluetooth device
+                        selectedDeviceId = bluetoothDevices[0].deviceId;
+                        audioInputSelect.value = selectedDeviceId;
+                    }
+                } else {
+                    addLog("No audio input devices found");
+                }
+            } catch (error) {
+                addLog(`Error enumerating audio devices: ${error.message}`);
+            }
+        }
+
+        // Handle audio input device selection change
+        audioInputSelect.addEventListener('change', function() {
+            selectedDeviceId = this.value;
+            addLog(`Selected audio input device: ${this.options[this.selectedIndex].text}`);
+            
+            // If assistant is running, restart it to use the new device
+            if (isRunning) {
+                stopAssistant();
+                setTimeout(() => {
+                    startAssistant();
+                }, 500);
             }
         });
 
@@ -290,7 +385,7 @@
                 updateStatus("Initializing...");
                 addLog("Voice assistant starting...");
 
-                // Initialize the keyword spotting
+                // Initialize the keyword spotting with selected device
                 await initKeywordSpotting();
                 
                 // Set up speech recognition
@@ -336,13 +431,27 @@
         // Initialize keyword spotting using TensorFlow.js
         async function initKeywordSpotting() {
             try {
-                // Load the speech commands model
-                recognizer = speechCommands.create('BROWSER_FFT');
+                // Create audio constraints with selected device
+                const audioConstraints = {
+                    deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined
+                };
+                
+                // Load the speech commands model with device constraints
+                recognizer = speechCommands.create('BROWSER_FFT', undefined, {
+                    invokeCallbackOnNoiseAndUnknown: false,
+                    includeSpectrogram: true,
+                    probabilityThreshold: 0.75
+                });
+                
                 await recognizer.ensureModelLoaded();
                 addLog("Speech commands model loaded");
                 
-                // Start listening for keywords
-                // We'll use "yes" as a proxy for "Genius" since it's included in the default model
+                // Create audio context with selected device
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: audioConstraints 
+                });
+                
+                // Start listening for keywords with selected device
                 recognizer.listen(result => {
                     if (!isRunning) return;
                     
@@ -358,8 +467,12 @@
                     }
                 }, {
                     includeSpectrogram: true,
-                    probabilityThreshold: 0.8
+                    probabilityThreshold: 0.8,
+                    overlapFactor: 0.5,
+                    audioTrackConstraints: audioConstraints
                 });
+                
+                addLog(`Listening with device: ${audioInputSelect.options[audioInputSelect.selectedIndex].text}`);
             } catch (error) {
                 addLog(`Error initializing keyword spotting: ${error.message}`);
                 throw error;
@@ -381,6 +494,24 @@
             recognition.interimResults = false;
             recognition.lang = 'en-US';
             
+            // Set device constraints if browser supports it
+            // Note: Standard Web Speech API doesn't support device selection directly,
+            // but some browsers may accept this non-standard property
+            if (selectedDeviceId) {
+                try {
+                    recognition.mediaDeviceId = selectedDeviceId;
+                    // For Chrome-specific implementation
+                    if (typeof recognition.audioContext !== 'undefined') {
+                        recognition.audioContext = {
+                            sampleRate: 16000,
+                            deviceId: selectedDeviceId
+                        };
+                    }
+                } catch (e) {
+                    addLog("Note: This browser may not support custom microphone selection for speech recognition");
+                }
+            }
+            
             // Set up result handler
             recognition.onresult = (event) => {
                 const last = event.results.length - 1;
@@ -398,6 +529,13 @@
             recognition.onerror = (event) => {
                 addLog(`Speech recognition error: ${event.error}`);
                 updateStatus("Listening for 'Genius'...");
+                
+                // Restart the recognition in case of errors
+                setTimeout(() => {
+                    if (isRunning) {
+                        resetAfterResponse();
+                    }
+                }, 1000);
             };
         }
 
@@ -521,8 +659,13 @@
             
             updateStatus("Listening for 'Genius'...");
             
-            // Restart keyword spotting
+            // Restart keyword spotting with the selected device
             if (recognizer) {
+                // Create audio constraints with selected device
+                const audioConstraints = {
+                    deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined
+                };
+                
                 recognizer.listen(result => {
                     if (!isRunning) return;
                     
@@ -537,7 +680,9 @@
                     }
                 }, {
                     includeSpectrogram: true,
-                    probabilityThreshold: 0.8
+                    probabilityThreshold: 0.8,
+                    overlapFactor: 0.5,
+                    audioTrackConstraints: audioConstraints
                 });
             }
         }
@@ -592,6 +737,21 @@
         function updateStatus(message) {
             statusText.textContent = message;
         }
+
+        // Check for device changes (like plugging in Bluetooth headphones)
+        navigator.mediaDevices.addEventListener('devicechange', async () => {
+            addLog("Audio device change detected");
+            await getAudioInputDevices();
+            
+            // If the assistant is running, consider restarting it with the new device list
+            if (isRunning) {
+                addLog("Restarting assistant to apply device changes");
+                stopAssistant();
+                setTimeout(() => {
+                    startAssistant();
+                }, 500);
+            }
+        });
 
         // Keep app running in background
         window.addEventListener('beforeunload', (event) => {
