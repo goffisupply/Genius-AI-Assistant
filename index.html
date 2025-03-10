@@ -180,40 +180,6 @@
         .hidden {
             display: none;
         }
-
-        .audio-selector {
-            margin: 20px 0;
-            padding: 15px;
-            background-color: #f9f9f9;
-            border-radius: 8px;
-        }
-
-        .audio-selector label {
-            display: block;
-            margin-bottom: 10px;
-            font-weight: 500;
-        }
-
-        .audio-selector select {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            background-color: white;
-            font-size: 14px;
-        }
-
-        .debug-btn {
-            display: block;
-            margin: 10px 0;
-            padding: 8px 15px;
-            background-color: #f39c12;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-        }
     </style>
 </head>
 <body>
@@ -236,16 +202,7 @@
                     <div id="statusText" class="status-text">Idle</div>
                 </div>
                 
-                <!-- Audio input device selector -->
-                <div class="audio-selector">
-                    <label for="audioInputSelect">Audio Input Device:</label>
-                    <select id="audioInputSelect">
-                        <option value="">Loading devices...</option>
-                    </select>
-                </div>
-                
                 <button id="toggleButton" class="toggle-button">Start Assistant</button>
-                <button id="debugButton" class="debug-btn">Debug Audio Devices</button>
                 
                 <div class="conversation">
                     <div id="questionContainer" class="question-container" style="display: none;">
@@ -278,9 +235,7 @@
         let recognition = null;
         let audioContext = null;
         let speechSynthesis = window.speechSynthesis;
-        let apiKey = "AIzaSyAS3hXY8q6HypRoIb9cN3WQbsFyBDYUNYk"; // Gemini API key
-        let selectedDeviceId = ""; // Store selected audio input device
-        let audioStream = null; // Store the active audio stream
+        let apiKey = "AIzaSyAS3hXY8q6HypRoIb9cN3WQbsFyBDYUNYk"; // Gemini API key from your Python code
 
         // DOM elements
         const permissionSection = document.getElementById('permissionSection');
@@ -289,20 +244,17 @@
         const statusIndicator = document.getElementById('statusIndicator');
         const statusText = document.getElementById('statusText');
         const toggleButton = document.getElementById('toggleButton');
-        const debugButton = document.getElementById('debugButton');
         const questionContainer = document.getElementById('questionContainer');
         const questionText = document.getElementById('questionText');
         const responseContainer = document.getElementById('responseContainer');
         const responseText = document.getElementById('responseText');
         const logContainer = document.getElementById('logContainer');
-        const audioInputSelect = document.getElementById('audioInputSelect');
 
         // Request microphone permission
         permissionButton.addEventListener('click', async () => {
             try {
                 // Request microphone permission
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                audioStream = stream; // Store the stream for later use
+                await navigator.mediaDevices.getUserMedia({ audio: true });
                 
                 // Hide permission section and show main UI
                 permissionSection.classList.add('hidden');
@@ -310,9 +262,6 @@
                 
                 // Initialize audio context
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                
-                // Get available audio devices
-                await getAudioInputDevices();
                 
                 // Add log
                 addLog("Microphone access granted");
@@ -322,96 +271,8 @@
             }
         });
 
-        // Get available audio input devices
-        async function getAudioInputDevices() {
-            try {
-                // Get list of media devices
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                
-                // Filter for audio input devices
-                const audioInputs = devices.filter(device => device.kind === 'audioinput');
-                
-                // Clear dropdown
-                audioInputSelect.innerHTML = '';
-                
-                // Add devices to dropdown
-                audioInputs.forEach(device => {
-                    const option = document.createElement('option');
-                    option.value = device.deviceId;
-                    option.text = device.label || `Microphone ${audioInputSelect.options.length + 1}`;
-                    audioInputSelect.add(option);
-                });
-                
-                // Select first device by default
-                if (audioInputs.length > 0) {
-                    selectedDeviceId = audioInputs[0].deviceId;
-                    addLog(`Found ${audioInputs.length} audio input devices`);
-                    
-                    // Check if any Bluetooth devices are detected
-                    const bluetoothDevices = audioInputs.filter(device => 
-                        device.label.toLowerCase().includes('bluetooth') || 
-                        device.label.toLowerCase().includes('airpods') ||
-                        device.label.toLowerCase().includes('wireless') ||
-                        device.label.toLowerCase().includes('headset'));
-                    
-                    if (bluetoothDevices.length > 0) {
-                        addLog(`Detected Bluetooth audio devices: ${bluetoothDevices.map(d => d.label).join(', ')}`);
-                        // Auto-select the first Bluetooth device
-                        selectedDeviceId = bluetoothDevices[0].deviceId;
-                        audioInputSelect.value = selectedDeviceId;
-                    }
-                } else {
-                    addLog("No audio input devices found");
-                }
-            } catch (error) {
-                addLog(`Error enumerating audio devices: ${error.message}`);
-            }
-        }
-
-        // Handle audio input device selection change
-        audioInputSelect.addEventListener('change', function() {
-            selectedDeviceId = this.value;
-            addLog(`Selected audio input device: ${this.options[this.selectedIndex].text}`);
-            
-            // If assistant is running, restart it to use the new device
-            if (isRunning) {
-                stopAssistant();
-                setTimeout(() => {
-                    startAssistant();
-                }, 500);
-            }
-        });
-
-        // Debug button to force refresh audio devices
-        debugButton.addEventListener('click', async () => {
-            addLog("Debug: Refreshing audio devices...");
-            await getAudioInputDevices();
-            
-            // Force a new audio permission request to refresh device list
-            try {
-                if (audioStream) {
-                    // Stop all tracks in the previous stream
-                    audioStream.getTracks().forEach(track => track.stop());
-                }
-                
-                const constraints = { 
-                    audio: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true 
-                };
-                
-                audioStream = await navigator.mediaDevices.getUserMedia(constraints);
-                addLog("Debug: New audio stream created with selected device");
-                
-                // Test audio with a beep
-                playBeep(1, 500, 0.1, 1000);
-            } catch (error) {
-                addLog(`Debug Error: ${error.message}`);
-            }
-        });
-
-        // Toggle voice assistant on/off - Fixed to properly start the assistant
+        // Toggle voice assistant on/off
         toggleButton.addEventListener('click', () => {
-            addLog(`Toggle button clicked. Current state: ${isRunning ? 'Running' : 'Stopped'}`);
-            
             if (isRunning) {
                 stopAssistant();
             } else {
@@ -422,14 +283,14 @@
         // Start the voice assistant
         async function startAssistant() {
             try {
-                addLog("Starting assistant...");
                 isRunning = true;
                 toggleButton.textContent = "Stop Assistant";
                 toggleButton.classList.add("running");
                 statusIndicator.classList.add("active");
                 updateStatus("Initializing...");
+                addLog("Voice assistant starting...");
 
-                // Initialize the keyword spotting with selected device
+                // Initialize the keyword spotting
                 await initKeywordSpotting();
                 
                 // Set up speech recognition
@@ -441,9 +302,6 @@
                 }
                 
                 updateStatus("Listening for 'Genius'...");
-                
-                // Test with a beep to confirm assistant is running
-                playBeep(1, 300, 0.1, 1500);
             } catch (error) {
                 addLog(`Error starting assistant: ${error.message}`);
                 stopAssistant();
@@ -452,31 +310,21 @@
 
         // Stop the voice assistant
         function stopAssistant() {
-            addLog("Stopping assistant...");
             isRunning = false;
             toggleButton.textContent = "Start Assistant";
             toggleButton.classList.remove("running");
             statusIndicator.classList.remove("active");
             updateStatus("Idle");
+            addLog("Voice assistant stopped");
 
             // Stop keyword recognition
             if (recognizer) {
-                try {
-                    recognizer.stopListening();
-                    addLog("Keyword recognizer stopped");
-                } catch (e) {
-                    addLog(`Error stopping recognizer: ${e.message}`);
-                }
+                recognizer.stopListening();
             }
             
             // Stop speech recognition
             if (recognition) {
-                try {
-                    recognition.abort();
-                    addLog("Speech recognition stopped");
-                } catch (e) {
-                    addLog(`Error stopping recognition: ${e.message}`);
-                }
+                recognition.stop();
             }
             
             // Stop any ongoing speech
@@ -488,41 +336,13 @@
         // Initialize keyword spotting using TensorFlow.js
         async function initKeywordSpotting() {
             try {
-                addLog("Initializing keyword spotting...");
-                
-                // Create audio constraints with selected device
-                const audioConstraints = { 
-                    deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined 
-                };
-                
-                // Request a new audio stream with the selected device
-                if (audioStream) {
-                    // Stop all tracks in the previous stream
-                    audioStream.getTracks().forEach(track => track.stop());
-                }
-                
-                audioStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
-                addLog("Audio stream created for selected device");
-                
                 // Load the speech commands model
-                if (recognizer) {
-                    try {
-                        recognizer.stopListening();
-                    } catch (e) {
-                        // Ignore errors when stopping previous recognizer
-                    }
-                }
-                
-                recognizer = speechCommands.create('BROWSER_FFT', undefined, {
-                    invokeCallbackOnNoiseAndUnknown: false,
-                    includeSpectrogram: true,
-                    probabilityThreshold: 0.75
-                });
-                
+                recognizer = speechCommands.create('BROWSER_FFT');
                 await recognizer.ensureModelLoaded();
                 addLog("Speech commands model loaded");
                 
-                // Start listening for keywords with selected device
+                // Start listening for keywords
+                // We'll use "yes" as a proxy for "Genius" since it's included in the default model
                 recognizer.listen(result => {
                     if (!isRunning) return;
                     
@@ -538,12 +358,8 @@
                     }
                 }, {
                     includeSpectrogram: true,
-                    probabilityThreshold: 0.8,
-                    overlapFactor: 0.5,
-                    audioTrackConstraints: audioConstraints
+                    probabilityThreshold: 0.8
                 });
-                
-                addLog(`Listening with device: ${audioInputSelect.options[audioInputSelect.selectedIndex].text}`);
             } catch (error) {
                 addLog(`Error initializing keyword spotting: ${error.message}`);
                 throw error;
@@ -565,22 +381,6 @@
             recognition.interimResults = false;
             recognition.lang = 'en-US';
             
-            // Set device constraints if browser supports it
-            if (selectedDeviceId) {
-                try {
-                    // For Chrome-specific implementation
-                    if (typeof recognition.audioSourceId !== 'undefined') {
-                        recognition.audioSourceId = selectedDeviceId;
-                    } else if (typeof recognition.sourceId !== 'undefined') {
-                        recognition.sourceId = selectedDeviceId;
-                    } else if (typeof recognition.mediaDeviceId !== 'undefined') {
-                        recognition.mediaDeviceId = selectedDeviceId;
-                    }
-                } catch (e) {
-                    addLog("Note: This browser may not support custom microphone selection for speech recognition");
-                }
-            }
-            
             // Set up result handler
             recognition.onresult = (event) => {
                 const last = event.results.length - 1;
@@ -598,21 +398,7 @@
             recognition.onerror = (event) => {
                 addLog(`Speech recognition error: ${event.error}`);
                 updateStatus("Listening for 'Genius'...");
-                
-                // Restart the recognition in case of errors
-                setTimeout(() => {
-                    if (isRunning) {
-                        resetAfterResponse();
-                    }
-                }, 1000);
             };
-            
-            // Set up end handler
-            recognition.onend = () => {
-                addLog("Speech recognition ended");
-            };
-            
-            addLog("Speech recognition setup complete");
         }
 
         // Handle keyword detection ("Genius")
@@ -629,13 +415,7 @@
             // Start speech recognition after a short delay
             setTimeout(() => {
                 if (recognition && isRunning) {
-                    try {
-                        recognition.start();
-                        addLog("Speech recognition started");
-                    } catch (e) {
-                        addLog(`Error starting recognition: ${e.message}`);
-                        resetAfterResponse();
-                    }
+                    recognition.start();
                 }
             }, 1000);
         }
@@ -741,87 +521,62 @@
             
             updateStatus("Listening for 'Genius'...");
             
-            // Restart keyword spotting with the selected device
+            // Restart keyword spotting
             if (recognizer) {
-                // Create audio constraints with selected device
-                const audioConstraints = {
-                    deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined
-                };
-                
-                try {
-                    recognizer.listen(result => {
-                        if (!isRunning) return;
-                        
-                        const scores = Array.from(result.scores);
-                        const maxScore = Math.max(...scores);
-                        const maxScoreIndex = scores.indexOf(maxScore);
-                        const wordLabels = recognizer.wordLabels();
-                        const detectedWord = wordLabels[maxScoreIndex];
-                        
-                        if (detectedWord === 'yes' && maxScore > 0.8) {
-                            handleKeywordDetected();
-                        }
-                    }, {
-                        includeSpectrogram: true,
-                        probabilityThreshold: 0.8,
-                        overlapFactor: 0.5,
-                        audioTrackConstraints: audioConstraints
-                    });
+                recognizer.listen(result => {
+                    if (!isRunning) return;
                     
-                    addLog("Keyword detection restarted");
-                } catch (e) {
-                    addLog(`Error restarting keyword detection: ${e.message}`);
-                    // Try to reinitialize completely if restarting fails
-                    setTimeout(() => {
-                        if (isRunning) {
-                            initKeywordSpotting().catch(err => {
-                                addLog(`Failed to reinitialize: ${err.message}`);
-                            });
-                        }
-                    }, 1000);
-                }
+                    const scores = Array.from(result.scores);
+                    const maxScore = Math.max(...scores);
+                    const maxScoreIndex = scores.indexOf(maxScore);
+                    const wordLabels = recognizer.wordLabels();
+                    const detectedWord = wordLabels[maxScoreIndex];
+                    
+                    if (detectedWord === 'yes' && maxScore > 0.8) {
+                        handleKeywordDetected();
+                    }
+                }, {
+                    includeSpectrogram: true,
+                    probabilityThreshold: 0.8
+                });
             }
         }
 
         // Play beep sound
         function playBeep(count = 1, duration = 700, delay = 0.1, frequency = 1800) {
-            try {
-                if (!audioContext) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                
-                let currentBeep = 0;
-                
-                function playNext() {
-                    if (currentBeep >= count) return;
-                    
-                    const oscillator = audioContext.createOscillator();
-                    const gainNode = audioContext.createGain();
-                    
-                    oscillator.connect(gainNode);
-                    gainNode.connect(audioContext.destination);
-                    
-                    oscillator.type = 'sine';
-                    oscillator.frequency.value = frequency;
-                    
-                    const now = audioContext.currentTime;
-                    gainNode.gain.setValueAtTime(0.5, now);
-                    
-                    oscillator.start(now);
-                    oscillator.stop(now + duration / 1000);
-                    
-                    currentBeep++;
-                    
-                    // Schedule next beep
-                    if (currentBeep < count) {
-                        setTimeout(playNext, duration + (delay * 1000));
-                    }
-                }
-                
-                playNext();
-            } catch (e) {
-                addLog(`Error playing beep: ${e.message}`);
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
             }
+            
+            let currentBeep = 0;
+            
+            function playNext() {
+                if (currentBeep >= count) return;
+                
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                oscillator.type = 'sine';
+                oscillator.frequency.value = frequency;
+                
+                const now = audioContext.currentTime;
+                gainNode.gain.setValueAtTime(0.5, now);
+                
+                oscillator.start(now);
+                oscillator.stop(now + duration / 1000);
+                
+                currentBeep++;
+                
+                // Schedule next beep
+                if (currentBeep < count) {
+                    setTimeout(playNext, duration + (delay * 1000));
+                }
+            }
+            
+            playNext();
         }
 
         // Add log entry
@@ -831,28 +586,12 @@
             entry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
             logContainer.appendChild(entry);
             logContainer.scrollTop = logContainer.scrollHeight;
-            console.log(message); // Also log to console for debugging
         }
 
         // Update status text
         function updateStatus(message) {
             statusText.textContent = message;
         }
-
-        // Check for device changes (like plugging in Bluetooth headphones)
-        navigator.mediaDevices.addEventListener('devicechange', async () => {
-            addLog("Audio device change detected");
-            await getAudioInputDevices();
-            
-            // If the assistant is running, consider restarting it with the new device list
-            if (isRunning) {
-                addLog("Restarting assistant to apply device changes");
-                stopAssistant();
-                setTimeout(() => {
-                    startAssistant();
-                }, 500);
-            }
-        });
 
         // Keep app running in background
         window.addEventListener('beforeunload', (event) => {
